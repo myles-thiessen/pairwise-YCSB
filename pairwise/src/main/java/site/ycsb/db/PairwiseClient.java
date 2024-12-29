@@ -13,24 +13,25 @@
  */
 package site.ycsb.db;
 
-import mthiessen.experiments.ExperimentClient;
-import site.ycsb.ByteIterator;
-import site.ycsb.DB;
-import site.ycsb.DBException;
-import site.ycsb.Status;
+import mthiessen.experiments.RemoteClient;
+import mthiessen.statemachines.RocksDBStateMachine;
+import site.ycsb.*;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.*;
 
-/**
- *
- */
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+/** */
 public class PairwiseClient extends DB {
 
   public static final String IP_PROPERTY = "pairwise.ip";
 
   public static final String PORT_PROPERTY = "pairwise.port";
 
-  private ExperimentClient client;
+  private RemoteClient client;
 
   @Override
   public void init() throws DBException {
@@ -40,14 +41,19 @@ public class PairwiseClient extends DB {
 
     String port = prop.getProperty(PORT_PROPERTY);
 
-    this.client = new ExperimentClient(ip, Integer.parseInt(port));
+    this.client = new RemoteClient(ip, Integer.parseInt(port));
   }
 
   @Override
   public Status read(
       String table, String key, Set<String> fields, Map<String, ByteIterator> result) {
-    this.client.read();
+    RocksDBStateMachine.ReadRequest readRequest = new RocksDBStateMachine.ReadRequest(table, key);
 
+    byte[] response = this.client.read(readRequest);
+    if (response == null) {
+      return Status.NOT_FOUND;
+    }
+    deserializeValues(response, fields, result);
     return Status.OK;
   }
 
@@ -58,29 +64,86 @@ public class PairwiseClient extends DB {
       int recordcount,
       Set<String> fields,
       Vector<HashMap<String, ByteIterator>> result) {
-    this.client.read();
 
-    return Status.OK;
+    return Status.SERVICE_UNAVAILABLE;
   }
 
   @Override
   public Status update(String table, String key, Map<String, ByteIterator> values) {
-    this.client.write();
-
-    return Status.OK;
+    return Status.SERVICE_UNAVAILABLE;
   }
 
   @Override
   public Status insert(String table, String key, Map<String, ByteIterator> values) {
-    this.client.write();
+    try {
+      RocksDBStateMachine.WriteRequest writeRequest =
+          new RocksDBStateMachine.WriteRequest(table, key, serializeValues(values));
 
-    return Status.OK;
+      this.client.insert(writeRequest);
+
+      return Status.OK;
+    } catch (IOException e) {
+      return Status.ERROR;
+    }
   }
 
   @Override
   public Status delete(String table, String key) {
-    this.client.write();
+    return Status.SERVICE_UNAVAILABLE;
+  }
 
-    return Status.OK;
+  private Map<String, ByteIterator> deserializeValues(
+      final byte[] values, final Set<String> fields, final Map<String, ByteIterator> result) {
+    final ByteBuffer buf = ByteBuffer.allocate(4);
+
+    int offset = 0;
+    while (offset < values.length) {
+      buf.put(values, offset, 4);
+      buf.flip();
+      final int keyLen = buf.getInt();
+      buf.clear();
+      offset += 4;
+
+      final String key = new String(values, offset, keyLen);
+      offset += keyLen;
+
+      buf.put(values, offset, 4);
+      buf.flip();
+      final int valueLen = buf.getInt();
+      buf.clear();
+      offset += 4;
+
+      if (fields == null || fields.contains(key)) {
+        result.put(key, new ByteArrayByteIterator(values, offset, valueLen));
+      }
+
+      offset += valueLen;
+    }
+
+    return result;
+  }
+
+  private byte[] serializeValues(final Map<String, ByteIterator> values) throws IOException {
+    try (final ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+      final ByteBuffer buf = ByteBuffer.allocate(4);
+
+      for (final Map.Entry<String, ByteIterator> value : values.entrySet()) {
+        final byte[] keyBytes = value.getKey().getBytes(UTF_8);
+        final byte[] valueBytes = value.getValue().toArray();
+
+        buf.putInt(keyBytes.length);
+        baos.write(buf.array());
+        baos.write(keyBytes);
+
+        buf.clear();
+
+        buf.putInt(valueBytes.length);
+        baos.write(buf.array());
+        baos.write(valueBytes);
+
+        buf.clear();
+      }
+      return baos.toByteArray();
+    }
   }
 }
