@@ -70,7 +70,16 @@ public class PairwiseClient extends DB {
 
   @Override
   public Status update(String table, String key, Map<String, ByteIterator> values) {
-    return Status.SERVICE_UNAVAILABLE;
+    try {
+      RocksDBStateMachine.WriteRequest writeRequest =
+          new RocksDBStateMachine.WriteRequest(table, key, serializeValues(values));
+
+      this.client.insert(writeRequest);
+
+      return Status.OK;
+    } catch (IOException e) {
+      return Status.ERROR;
+    }
   }
 
   @Override
