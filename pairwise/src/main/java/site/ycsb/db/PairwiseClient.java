@@ -13,7 +13,7 @@
  */
 package site.ycsb.db;
 
-import mthiessen.experiments.RemoteClient;
+import mthiessen.experiments.clients.RemoteClient;
 import mthiessen.statemachines.RocksDBStateMachine;
 import site.ycsb.*;
 
